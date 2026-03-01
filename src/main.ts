@@ -1,30 +1,29 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
+import { setupSwagger } from './utils/swagger.util';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.useGlobalPipes(
     new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
       transform: true,
     }),
   );
 
+  app.enableCors({
+    origin: process.env.CLIENT_URL ?? 'http://localhost:3000',
+    credentials: true,
+  });
+
+  app.use(cookieParser());
+
   app.setGlobalPrefix('api');
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('My API')
-    .setDescription('API documentation')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
-
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-
-  SwaggerModule.setup('api/docs', app, document, {
-    customSiteTitle: 'My API Docs',
-  });
+  setupSwagger(app);
 
   await app.listen(process.env.PORT ?? 3000);
 }
