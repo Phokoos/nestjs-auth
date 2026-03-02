@@ -11,7 +11,7 @@ import {
 import { AuthService } from './auth.service';
 import { RegisterRequest } from './dto/register.dto';
 import { LoginRequest } from './dto/login.dto';
-import type { Response, Request } from 'express';
+import { Response, Request } from 'express';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -19,29 +19,26 @@ import {
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { AuthResponse } from './dto/auth.dto';
-import { Authorized } from './decoratrs/authorized.decorator';
-import { Public } from './decoratrs/public.decorator';
+import { Authorized } from './decorators/authorized.decorator';
+import { Public } from './decorators/public.decorator';
+import { JwtPayload } from './interfaces/jwt.interface';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Public()
-  @ApiOperation({
-    summary: 'Register a new user',
-  })
-  @ApiCreatedResponse({
-    type: AuthResponse,
-  })
-  @ApiBadRequestResponse({
-    description: 'Invalid input data',
-  })
-  @ApiConflictResponse({
-    description: 'User already exists',
-  })
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Register a new user' })
+  @ApiCreatedResponse({ type: AuthResponse })
+  @ApiBadRequestResponse({ description: 'Invalid input data' })
+  @ApiConflictResponse({ description: 'User already exists' })
+  @ApiTooManyRequestsResponse({ description: 'Too many requests' })
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
   async register(
@@ -52,18 +49,12 @@ export class AuthController {
   }
 
   @Public()
-  @ApiOperation({
-    summary: 'Login a user',
-  })
-  @ApiOkResponse({
-    type: AuthResponse,
-  })
-  @ApiBadRequestResponse({
-    description: 'Invalid input data',
-  })
-  @ApiUnauthorizedResponse({
-    description: 'Invalid credentials',
-  })
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({ summary: 'Login a user' })
+  @ApiOkResponse({ type: AuthResponse })
+  @ApiBadRequestResponse({ description: 'Invalid input data' })
+  @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
+  @ApiTooManyRequestsResponse({ description: 'Too many requests' })
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(
@@ -74,31 +65,24 @@ export class AuthController {
   }
 
   @Public()
-  @ApiOperation({
-    summary: 'Refresh a user token',
-  })
-  @ApiOkResponse({
-    type: AuthResponse,
-  })
-  @ApiUnauthorizedResponse({
-    description: 'Invalid credentials',
-  })
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({ summary: 'Refresh a user token' })
+  @ApiOkResponse({ type: AuthResponse })
+  @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
+  @ApiTooManyRequestsResponse({ description: 'Too many requests' })
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   async refresh(
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
-  ): Promise<object> {
+  ): Promise<AuthResponse> {
     return this.authService.refresh(req, res);
   }
 
   @Public()
-  @ApiOperation({
-    summary: 'Logout a user',
-  })
-  @ApiUnauthorizedResponse({
-    description: 'Invalid credentials',
-  })
+  @ApiOperation({ summary: 'Logout a user' })
+  @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
+  @ApiTooManyRequestsResponse({ description: 'Too many requests' })
   @ApiOkResponse({
     schema: {
       type: 'object',
@@ -110,13 +94,12 @@ export class AuthController {
   })
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  logout(@Res({ passthrough: true }) res: Response) {
-    return this.authService.logout(res);
+  logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return this.authService.logout(req, res);
   }
 
-  @ApiOperation({
-    summary: 'Get the authenticated user',
-  })
+  @ApiOperation({ summary: 'Get the authenticated user' })
+  @ApiTooManyRequestsResponse({ description: 'Too many requests' })
   @ApiOkResponse({
     schema: {
       type: 'object',
@@ -132,7 +115,7 @@ export class AuthController {
   })
   @ApiBearerAuth()
   @Get('me')
-  me(@Authorized() user: object): object {
+  me(@Authorized() user: JwtPayload): JwtPayload {
     return user;
   }
 }

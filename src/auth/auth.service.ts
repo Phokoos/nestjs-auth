@@ -19,7 +19,9 @@ import { AuthResponse } from './dto/auth.dto';
 export class AuthService {
   private readonly JWT_ACCESS_TOKEN_TTL: StringValue;
   private readonly JWT_REFRESH_TOKEN_TTL: StringValue;
+  private readonly JWT_REFRESH_SECRET: string;
   private readonly COOKIE_DOMAIN: string;
+  private readonly IS_DEV: boolean;
 
   constructor(
     private readonly prismaService: PrismaService,
@@ -33,6 +35,9 @@ export class AuthService {
     this.JWT_REFRESH_TOKEN_TTL = configService.getOrThrow<StringValue>(
       'JWT_REFRESH_TOKEN_TTL',
     );
+    this.JWT_REFRESH_SECRET =
+      configService.getOrThrow<string>('JWT_REFRESH_SECRET');
+    this.IS_DEV = isDev(this.configService);
   }
 
   async register(res: Response, dto: RegisterRequest): Promise<AuthResponse> {
@@ -88,6 +93,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    await this.prismaService.refreshToken.deleteMany({
+      where: { userId: user.id },
+    });
+
     return this.auth(res, {
       id: user.id,
       name: user.name,
@@ -95,29 +104,33 @@ export class AuthService {
     });
   }
 
-  async refresh(req: Request, res: Response): Promise<object> {
+  async refresh(req: Request, res: Response): Promise<AuthResponse> {
     const refreshToken = req.cookies['refreshToken'] as string;
 
     if (!refreshToken) {
       throw new UnauthorizedException('Refresh token not found');
     }
 
-    let payload: JwtPayload;
-    try {
-      payload = await this.jwtService.verifyAsync(refreshToken);
-    } catch {
+    const { count } = await this.prismaService.refreshToken.deleteMany({
+      where: { token: refreshToken },
+    });
+
+    if (count === 0) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    let payload: JwtPayload;
+    try {
+      payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret: this.JWT_REFRESH_SECRET,
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
     const user = await this.prismaService.user.findUnique({
-      where: {
-        id: payload.id,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-      },
+      where: { id: payload.id },
+      select: { id: true, name: true, email: true },
     });
 
     if (!user) {
@@ -127,36 +140,46 @@ export class AuthService {
     return this.auth(res, user);
   }
 
-  public logout(res: Response): object {
-    try {
-      res.clearCookie('refreshToken', {
-        httpOnly: true,
-        domain: this.COOKIE_DOMAIN,
-        secure: !isDev(this.configService),
-        sameSite: isDev(this.configService) ? 'none' : 'lax',
-      });
+  public async logout(req: Request, res: Response): Promise<object> {
+    const refreshToken = req.cookies['refreshToken'] as string;
 
-      return {
-        status: 'success',
-        message: 'Logged out successfully',
-      };
-    } catch {
-      throw new UnauthorizedException('Invalid credentials');
+    if (refreshToken) {
+      await this.prismaService.refreshToken.deleteMany({
+        where: { token: refreshToken },
+      });
     }
+
+    res.clearCookie('refreshToken', {
+      httpOnly: true,
+      domain: this.COOKIE_DOMAIN,
+      secure: !this.IS_DEV,
+      sameSite: this.IS_DEV ? 'lax' : 'none',
+    });
+
+    return {
+      status: 'success',
+      message: 'Logged out successfully',
+    };
   }
 
-  private auth(res: Response, user: JwtPayload): AuthResponse {
+  private async auth(res: Response, user: JwtPayload): Promise<AuthResponse> {
     const { accessToken, refreshToken } = this.generateToken(
       user.id,
       user.name,
       user.email,
     );
 
-    this.setCookie(
-      res,
-      refreshToken,
-      new Date(Date.now() + ms(this.JWT_REFRESH_TOKEN_TTL)),
-    );
+    const expiresAt = new Date(Date.now() + ms(this.JWT_REFRESH_TOKEN_TTL));
+
+    await this.prismaService.refreshToken.create({
+      data: {
+        token: refreshToken,
+        userId: user.id,
+        expiresAt,
+      },
+    });
+
+    this.setCookie(res, refreshToken, expiresAt);
 
     return {
       accessToken,
@@ -193,6 +216,7 @@ export class AuthService {
 
     const refreshToken = this.jwtService.sign(payload, {
       expiresIn: this.JWT_REFRESH_TOKEN_TTL,
+      secret: this.JWT_REFRESH_SECRET,
     });
 
     return {
@@ -206,8 +230,8 @@ export class AuthService {
       httpOnly: true,
       domain: this.COOKIE_DOMAIN,
       expires,
-      secure: !isDev(this.configService),
-      sameSite: isDev(this.configService) ? 'none' : 'lax',
+      secure: !this.IS_DEV,
+      sameSite: this.IS_DEV ? 'lax' : 'none',
     });
   }
 }
